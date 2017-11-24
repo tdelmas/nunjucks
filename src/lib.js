@@ -277,10 +277,23 @@ exports.keys = function(obj) {
     else {
         var keys = [];
         for(var k in obj) {
-            if(obj.hasOwnProperty(k)) {
+            if(Object.prototype.hasOwnProperty.call(obj, k)) {
                 keys.push(k);
             }
         }
         return keys;
+    }
+};
+
+exports.inOperator = function (key, val) {
+    if (exports.isArray(val)) {
+        return exports.indexOf(val, key) !== -1;
+    } else if (exports.isObject(val)) {
+        return key in val;
+    } else if (exports.isString(val)) {
+        return val.indexOf(key) !== -1;
+    } else {
+        throw new Error('Cannot use "in" operator to search for "'
+            + key + '" in unexpected types.');
     }
 };

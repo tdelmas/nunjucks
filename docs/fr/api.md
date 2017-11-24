@@ -9,17 +9,18 @@ title: API
 L'API pour nunjucks couvre le rendu des templates, l'ajout des filtres et
 des extensions, la personnalisation du chargement des templates et plus encore.
 
-## API simplifiée
-
-Si vous n'avez pas besoin d'une personnalisation en profondeur du système, vous pouvez utiliser
-l'API simplifiée de haut niveau pour le chargement et le rendu des templates.
-
 **Avertissement** : nunjucks n'a pas d'exécution de [sandbox](https://fr.wikipedia.org/wiki/Sandbox_%28s%C3%A9curit%C3%A9_informatique%29) donc il est potentiellement
   dangereux d'exécuter des templates définis par l'utilisateur. Sur le serveur, vous risquez
   des [vecteurs d'attaque](https://fr.wiktionary.org/wiki/vecteur_d%E2%80%99attaque) pour accéder aux données sensibles. Sur le client, vous risquez
   des vulnérabilités de [cross-site scripting](https://fr.wikipedia.org/wiki/Cross-site_scripting) (voir [cette
   question](https://github.com/mozilla/nunjucks-docs/issues/17) pour
   plus d'informations).
+
+
+## API simplifiée
+
+  Si vous n'avez pas besoin d'une personnalisation en profondeur du système, vous pouvez utiliser
+  l'API simplifiée de haut niveau pour le chargement et le rendu des templates.
 
 {% endraw %}
 {% api %}
@@ -84,11 +85,11 @@ et les options suivantes sont disponibles dans **opts** :
 * **throwOnUndefined** *(par défaut : false)* lève des erreurs quand le résultat a une valeur null/undefined
 * **trimBlocks** *(par défaut : false)* supprime automatiquement les sauts de lignes de fin de block/tag
 * **lstripBlocks** *(par défaut : false)* supprime automatiquement les espaces de début de block/tag
-* **watch** *(par défaut : false)* recharge les templates quand ils ont été changés (côté serveur)
+* **watch** *(par défaut : false)* recharge les templates quand ils ont été changés (côté serveur). Pour utiliser watch, veuillez vérifier que la dépendance optionnelle *chokidar* soit installée.
 * **noCache** *(par défaut : false)* ne jamais utiliser le cache et recompiler les templates à chaque fois (côté serveur)
 * **web** un objet pour la configuration du chargement des templates dans le navigateur :
   * **useCache** *(par défaut : false)* activera le cache et les templates ne verront jamais les mises à jour.
-  * **async** *(par défaut : false)* chargera les templates de manière asynchrone au lieu de façon synchrone.
+  * **async** *(par défaut : false)* chargera les templates de manière asynchrone au lieu de façon synchrone. (Nécessite l'utilisation de [l'API asynchrone](#support-asynchrone) pour le rendu).
 * **express** une app express que nunjucks doit installer
 * **tags:** *(par défaut : voir la syntaxe nunjucks)* définit la syntaxe pour
     les tags de nunjucks. Voir [Personnalisation de la Syntaxe](#personnalisation-de-la-syntaxe)
@@ -96,6 +97,13 @@ et les options suivantes sont disponibles dans **opts** :
 `configure` retourne une instance `Environment`, qui vous permet d'ajouter des
 filtres et des extensions tout en utilisant l'API simplifiée. Voir ci-dessous pour
 plus d'informations sur `Environment`.
+
+**Avertissement** : L'API simplifiée (ci-dessus, par exemple `nunjucks.render`) utilise toujours la
+  configuration de l'appel le plus récent de `nunjucks.configure`. Comme cela est
+  implicite et peut entraîner des effets secondaires inattendus, l'utilisation de l'API simplifiée
+  est déconseillée dans la plupart des cas (surtout si `configure` est utilisé). A la place,
+  créez explicitement un environnement en utilisant `var env = nunjucks.configure(...)`
+  et ensuite appeler `env.render(...)` etc.
 
 ```js
 nunjucks.configure('views');
@@ -127,8 +135,9 @@ ne visent pas une compatibilité complète de Jinja/Python, cela pourra
 aider les utilisateurs qui le recherchent au plus juste.
 
 Cela ajoute `True` et `False` qui correspond aux valeurs `true` et `false`
-de JS, ainsi cela se rapproche des tableaux et des objets pour les méthodes avec un style
-Python. [Vérifiez la source](https://github.com/mozilla/nunjucks/blob/master/src/jinja-compat.js)
+de JS. En plus, cela se rapproche des tableaux et des objets pour les méthodes
+avec un style Python et permet également l'utilisation de la syntaxe "slice" Python.
+[Vérifiez la source](https://github.com/mozilla/nunjucks/blob/master/src/jinja-compat.js)
 pour voir tout ce qu'il ajoute.
 {% endapi %}
 {% raw %}
@@ -153,7 +162,7 @@ des chargeurs de templates personnalisés.
 constructor
 new Environment([loaders], [opts])
 
-Le constructeur prend une liste de **loaders** (chargeurs) et un hash de 
+Le constructeur prend une liste de **loaders** (chargeurs) et un hash de
 paramètres de configuration **opts**. Si **loaders** est null, sa valeur par
 défaut pour le chargement est le répertoire ou l'URL courant. Vous pouvez passer
 un seul chargeur ou un tableau de chargeurs. Si vous passez un tableau de chargeurs,
@@ -175,16 +184,16 @@ le navigateur. Voir [`Chargeur`](#chargeur) pour plus d'informations.
 
 ```js
 // Le FileSystemLoader est disponible si on est dans node
-var env = new Environment(new nunjucks.FileSystemLoader('views'));
+var env = new nunjucks.Environment(new nunjucks.FileSystemLoader('views'));
 
-var env = new Environment(new nunjucks.FileSystemLoader('views'),
+var env = new nunjucks.Environment(new nunjucks.FileSystemLoader('views'),
                           { autoescape: false });
 
-var env = new Environment([new nunjucks.FileSystemLoader('views'),
+var env = new nunjucks.Environment([new nunjucks.FileSystemLoader('views'),
                            new MyCustomLoader()]);
 
 // Le WebLoader est disponible si on est dans le navigateur
-var env = new Environment(new nunjucks.WebLoader('/views'));
+var env = new nunjucks.Environment(new nunjucks.WebLoader('/views'));
 ```
 {% endapi %}
 
@@ -228,7 +237,7 @@ env.addFilter(name, func, [async])
 
 Ajoute un filtre personnalisé nommé **name** qui appelle **func** à chaque fois
 qu'il est appelé. Si le filtre doit être asynchrone, **async** doit être à `true`
-(voir le [support asynchrone](#support-asynchrone)). Voir
+(voir le [support asynchrone](#support-asynchrone)). Retourne `env` pour chaîner d'autres méthodes. Voir
 [Filtres personnalisés](#filtres-personnaliss).
 
 {% endapi %}
@@ -244,7 +253,7 @@ addExtension
 env.addExtension(name, ext)
 
 Ajoute l'extension personnalisée **ext** nommée **name**. **ext** est un objet
-avec quelques méthodes spécifiques qui sont appelés par le système d'extension.
+avec quelques méthodes spécifiques qui sont appelés par le système d'extension. Retourne `env` pour chaîner d'autres méthodes.
 Voir les [Tags personnalisés](#tags-personnaliss).
 
 {% endapi %}
@@ -273,6 +282,13 @@ Retourne true si une extension personnalisée nommée **name** a été ajoutée.
 addGlobal
 env.addGlobal(name, value)
 Ajoute une valeur globale qui sera disponible pour tous les templates. Remarque : ceci écrasera toute valeur globale nommée `name`.
+Retourne `env` pour chaîner d'autres méthodes.
+{% endapi %}
+
+{% api %}
+getGlobal
+env.getGlobal(name)
+Retourne une valeur globale nommée **name**.
 {% endapi %}
 
 {% api %}
@@ -303,7 +319,7 @@ env.express(app)
 Installe nunjucks comme moteur de rendu pour l'**app** express. Après
 avoir fait cela, vous pouvez utiliser express normalement. Remarquez que vous pouvez le
 faire automatiquement avec l'API simplifiée par l'appel de [`configure`](#configure)
-en passant dans l'app l'option **express**.
+en passant dans l'app l'option **express**. Retourne `env` pour chaîner d'autres méthodes.
 
 ```js
 var app = express();
@@ -387,7 +403,7 @@ tous les templates et il est par défaut dans le répertoire de travail courant.
 
 **opts** est un objet avec les propriétés optionnelles suivantes :
 
-* **watch** - si `true`, le système mettra à jour automatiquement les templates
+* **watch** - si `true`, le système mettra à jour automatiquement les templates. Pour utiliser watch, veuillez vérifier que la dépendance optionnelle *chokidar* soit installée.
   quand ils sont modifiés sur le système de fichiers
 * **noCache** - si `true`, le système évitera l'utilisation d'un cache et les
   templates seront recompilés à chaque fois
@@ -460,8 +476,8 @@ var MyLoader = nunjucks.Loader.extend({
         // configure un processus qui regarde ici les templates
         // et appelle `this.emit('update', name)` lorsqu'un template
         // est modifié
-    }
-    
+    },
+
     getSource: function(name) {
         // charge le template
     }
@@ -482,7 +498,7 @@ utilisé de façon asynchrone.
 ```js
 var MyLoader = nunjucks.Loader.extend({
     async: true,
-    
+
     getSource: function(name, callback) {
         // charge le template
         // ...
@@ -558,8 +574,8 @@ production, ce qui simplifie la configuration. Cependant, vous allez vouloir que
 chose qui recompile automatiquement les templates lors du développement sauf si
 vous voulez les recompiler manuellement après chaque changement.
 
-1. Pour le développement, utilisez la [tâche grunt](https://github.com/jlongster/grunt-nunjucks) qui surveillera
-les modifications de votre répertoire de template et automatiquement les [précompilera](#prcompilation)
+1. Pour le développement, utilisez les tâches [grunt](https://github.com/jlongster/grunt-nunjucks) ou [gulp](https://github.com/sindresorhus/gulp-nunjucks) qui surveilleront
+les modifications de votre répertoire de template et automatiquement les [précompileront](#prcompilation)
 dans un fichier js
 2. Chargez [nunjucks-slim.js](../files/nunjucks-slim.js) et `templates.js`, ou tout ce que vous avez
 nommé comme fichier js précompilé, avec soit une balise script ou un chargeur de module.
@@ -597,7 +613,7 @@ asynchrones séparés par des virgules avec `-a`, tel que `-a foo,bar,baz`. Si v
 utilisez uniquement des filtres synchrones normaux, vous ne devez rien faire.
 
 Les extensions ne peuvent pas être spécifiées avec ce script. Vous devez utiliser
-l'API precompile ci-dessous si vous les utilisez.
+l'API précompile ci-dessous si vous les utilisez.
 
 ### API
 
@@ -624,6 +640,11 @@ Précompile un fichier ou un répertoire depuis **path**. **opts** est un hash a
 * **env**: un environnement à utiliser (on récupère via ce dernier les extensions et les filtres asynchrone)
 * **include**: un tableau de fichiers/dossiers à inclure (les dossiers sont automatiquement inclus, les fichiers sont automatiquement exclus)
 * **exclude**: un tableau de fichiers/dossiers à exclure (les dossiers sont automatiquement inclus, les fichiers sont automatiquement exclus)
+* **wrapper**: `function(templates, opts)` Personnalise le format de sortie des templates précompilés. Cette fonction doit renvoyer un string
+    * **templates**: un tableau d'objets avec les propriétés suivantes :
+        * **name**: nom du template
+        * **template**: la chaine du source du template précompilé en javascript
+    * **opts**: objet de toutes les options ci-dessus
 
 ```js
 var env = new nunjucks.Environment();
@@ -656,9 +677,9 @@ Vous avez besoin de lire cette section seulement si vous êtes intéressé par l
 rendu asynchrone. Il n'y a aucun avantage en termes de performance, il doit uniquement
 permettre aux filtres et aux extensions personnalisées de faire des appels asynchrones. Si
 vous ne vous souciez pas de cela, vous devez simplement utiliser l'API normal tel que
-`var res = env.render('foo.html');`. Il n'y a pas besoin de forcer le 
+`var res = env.render('foo.html');`. Il n'y a pas besoin de forcer le
 `callback`, et c'est pourquoi il est facultatif dans toutes les fonctions
-de rendu. 
+de rendu.
 
 Depuis la version 1.0, nunjucks fournit un moyen de rendre les templates de
 manière asynchrone. Cela signifie que les filtres et extensions personnalisées peuvent faire
@@ -795,7 +816,7 @@ Le template peut l'utiliser ainsi :
 
 Vous *devez* passer tous les arguments de position avant les arguments avec mots
 clefs (`foo(1)` est valide, mais `foo(1, bar=10)` ne l'est pas). Donc, vous ne
-pouvez pas définir un argument de position avec un argument avec mots clefs, bien 
+pouvez pas définir un argument de position avec un argument avec mots clefs, bien
 que cela soit possible en Python (comme `foo(1, y=1)`).
 
 ### Asynchrone
@@ -828,8 +849,8 @@ Cela vous permet d'utiliser l'API du parser (analyseur) et vous permet de faire 
 ce que vous voulez avec le template.
 
 Remarque: Lors de la précompilation, **vous devez installer les extensions pour
-la compilation**. Vous devez utiliser l'API de [précompilation](#api1) (ou la 
-[tâche de grunt](https://github.com/jlongster/grunt-nunjucks)) à la place du
+la compilation**. Vous devez utiliser l'API de [précompilation](#api1) (ou les tâches [grunt](https://github.com/jlongster/grunt-nunjucks) ou
+[gulp](https://github.com/sindresorhus/gulp-nunjucks)) à la place du
 script. Vous devrez créer un objet [`Environment`](#environment),
 installez vos extensions et les transmettre au précompilateur.
 

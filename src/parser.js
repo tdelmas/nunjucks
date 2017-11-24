@@ -129,7 +129,14 @@ var Parser = Object.extend({
     },
 
     advanceAfterVariableEnd: function() {
-        if(!this.skip(lexer.TOKEN_VARIABLE_END)) {
+        var tok = this.nextToken();
+
+        if(tok && tok.type === lexer.TOKEN_VARIABLE_END) {
+            this.dropLeadingWhitespace = tok.value.charAt(
+                tok.value.length - this.tokens.tags.VARIABLE_END.length - 1
+            ) === '-';
+        } else {
+            this.pushToken(tok);
             this.fail('expected variable end');
         }
     },
@@ -294,7 +301,7 @@ var Parser = Object.extend({
                             importTok.colno);
         }
 
-        var target = this.parsePrimary();
+        var target = this.parseExpression();
 
         var withContext = this.parseWithContext();
 
@@ -315,7 +322,7 @@ var Parser = Object.extend({
             this.fail('parseFrom: expected from');
         }
 
-        var template = this.parsePrimary();
+        var template = this.parseExpression();
 
         if(!this.skipSymbol('import')) {
             this.fail('parseFrom: expected import',
@@ -399,49 +406,63 @@ var Parser = Object.extend({
         this.advanceAfterBlockEnd(tag.value);
 
         node.body = this.parseUntilBlocks('endblock');
+        this.skipSymbol('endblock');
+        this.skipSymbol(node.name.value);
 
-        if(!this.peekToken()) {
+        var tok = this.peekToken();
+        if(!tok) {
             this.fail('parseBlock: expected endblock, got end of file');
         }
 
-        this.advanceAfterBlockEnd();
+        this.advanceAfterBlockEnd(tok.value);
 
         return node;
     },
 
-    parseTemplateRef: function(tagName, NodeType) {
+    parseExtends: function() {
+        var tagName = 'extends';
         var tag = this.peekToken();
         if(!this.skipSymbol(tagName)) {
             this.fail('parseTemplateRef: expected '+ tagName);
         }
 
-        var node = new NodeType(tag.lineno, tag.colno);
+        var node = new nodes.Extends(tag.lineno, tag.colno);
         node.template = this.parseExpression();
 
         this.advanceAfterBlockEnd(tag.value);
         return node;
     },
 
-    parseExtends: function() {
-        return this.parseTemplateRef('extends', nodes.Extends);
-    },
-
     parseInclude: function() {
-        return this.parseTemplateRef('include', nodes.Include);
+        var tagName = 'include';
+        var tag = this.peekToken();
+        if(!this.skipSymbol(tagName)) {
+            this.fail('parseInclude: expected '+ tagName);
+        }
+
+        var node = new nodes.Include(tag.lineno, tag.colno);
+        node.template = this.parseExpression();
+
+        if(this.skipSymbol('ignore') && this.skipSymbol('missing')) {
+            node.ignoreMissing = true;
+        }
+
+        this.advanceAfterBlockEnd(tag.value);
+        return node;
     },
 
     parseIf: function() {
         var tag = this.peekToken();
         var node;
 
-        if(this.skipSymbol('if') || this.skipSymbol('elif')) {
+        if(this.skipSymbol('if') || this.skipSymbol('elif') || this.skipSymbol('elseif')) {
             node = new nodes.If(tag.lineno, tag.colno);
         }
         else if(this.skipSymbol('ifAsync')) {
             node = new nodes.IfAsync(tag.lineno, tag.colno);
         }
         else {
-            this.fail('parseIf: expected if or elif',
+            this.fail('parseIf: expected if, elif, or elseif',
                       tag.lineno,
                       tag.colno);
         }
@@ -449,10 +470,11 @@ var Parser = Object.extend({
         node.cond = this.parseExpression();
         this.advanceAfterBlockEnd(tag.value);
 
-        node.body = this.parseUntilBlocks('elif', 'else', 'endif');
+        node.body = this.parseUntilBlocks('elif', 'elseif', 'else', 'endif');
         var tok = this.peekToken();
 
         switch(tok && tok.value) {
+        case 'elseif':
         case 'elif':
             node.else_ = this.parseIf();
             break;
@@ -466,7 +488,7 @@ var Parser = Object.extend({
             this.advanceAfterBlockEnd();
             break;
         default:
-            this.fail('parseIf: expected endif, else, or endif, ' +
+            this.fail('parseIf: expected elif, else, or endif, ' +
                       'got end of file');
         }
 
@@ -491,13 +513,25 @@ var Parser = Object.extend({
         }
 
         if(!this.skipValue(lexer.TOKEN_OPERATOR, '=')) {
-            this.fail('parseSet: expected = in set tag',
-                      tag.lineno,
-                      tag.colno);
+            if (!this.skip(lexer.TOKEN_BLOCK_END)) {
+                this.fail('parseSet: expected = or block end in set tag',
+                          tag.lineno,
+                          tag.colno);
+            }
+            else {
+                node.body = new nodes.Capture(
+                    tag.lineno,
+                    tag.colno,
+                    this.parseUntilBlocks('endset')
+                );
+                node.value = null;
+                this.advanceAfterBlockEnd();
+            }
         }
-
-        node.value = this.parseExpression();
-        this.advanceAfterBlockEnd(tag.value);
+        else {
+            node.value = this.parseExpression();
+            this.advanceAfterBlockEnd(tag.value);
+        }
 
         return node;
     },
@@ -517,6 +551,7 @@ var Parser = Object.extend({
 
         switch(tok.value) {
         case 'raw': return this.parseRaw();
+        case 'verbatim': return this.parseRaw('verbatim');
         case 'if':
         case 'ifAsync':
             return this.parseIf();
@@ -548,9 +583,11 @@ var Parser = Object.extend({
         return node;
     },
 
-    parseRaw: function() {
+    parseRaw: function(tagName) {
+        tagName = tagName || 'raw';
+        var endTagName = 'end' + tagName;
         // Look for upcoming raw blocks (ignore all other kinds of blocks)
-        var rawBlockRegex = /([\s\S]*?){%\s*(raw|endraw)\s*(?=%})%}/;
+        var rawBlockRegex = new RegExp('([\\s\\S]*?){%\\s*(' + tagName + '|' + endTagName + ')\\s*(?=%})%}');
         var rawLevel = 1;
         var str = '';
         var matches = null;
@@ -567,9 +604,9 @@ var Parser = Object.extend({
             var blockName = matches[2];
 
             // Adjust rawlevel
-            if(blockName === 'raw') {
+            if(blockName === tagName) {
                 rawLevel += 1;
-            } else if(blockName === 'endraw') {
+            } else if(blockName === endTagName) {
                 rawLevel -= 1;
             }
 
@@ -734,7 +771,7 @@ var Parser = Object.extend({
     },
 
     parseCompare: function() {
-        var compareOps = ['==', '!=', '<', '>', '<=', '>='];
+        var compareOps = ['==', '===', '!=', '!==', '<', '>', '<=', '>='];
         var expr = this.parseConcat();
         var ops = [];
 
@@ -931,16 +968,16 @@ var Parser = Object.extend({
         }
         else if(tok.type === lexer.TOKEN_SYMBOL) {
             node = new nodes.Symbol(tok.lineno, tok.colno, tok.value);
-
-            if(!noPostfix) {
-                node = this.parsePostfix(node);
-            }
         }
         else {
             // See if it's an aggregate type, we need to push the
             // current delimiter token back on
             this.pushToken(tok);
             node = this.parseAggregate();
+        }
+
+        if(!noPostfix) {
+            node = this.parsePostfix(node);
         }
 
         if(node) {
@@ -1003,7 +1040,11 @@ var Parser = Object.extend({
         var args = this.parseFilterArgs(name);
 
         this.advanceAfterBlockEnd(filterTok.value);
-        var body = this.parseUntilBlocks('endfilter');
+        var body = new nodes.Capture(
+            name.lineno,
+            name.colno,
+            this.parseUntilBlocks('endfilter')
+        );
         this.advanceAfterBlockEnd();
 
         var node = new nodes.Filter(
@@ -1013,9 +1054,7 @@ var Parser = Object.extend({
             new nodes.NodeList(
                 name.lineno,
                 name.colno,
-                // Body is a NodeList with an Output node as a child,
-                // need to strip those
-                body.children[0].children.concat(args)
+                [body].concat(args)
             )
         );
 
@@ -1176,10 +1215,16 @@ var Parser = Object.extend({
                     this.dropLeadingWhitespace = false;
                 }
 
-                // Same for the succeding block start token
+                // Same for the succeeding block start token
                 if(nextToken &&
-                   nextToken.type === lexer.TOKEN_BLOCK_START &&
-                   nextVal.charAt(nextVal.length - 1) === '-') {
+                    ((nextToken.type === lexer.TOKEN_BLOCK_START &&
+                      nextVal.charAt(nextVal.length - 1) === '-') ||
+                    (nextToken.type === lexer.TOKEN_VARIABLE_START &&
+                      nextVal.charAt(this.tokens.tags.VARIABLE_START.length)
+                        === '-') ||
+                    (nextToken.type === lexer.TOKEN_COMMENT &&
+                      nextVal.charAt(this.tokens.tags.COMMENT_START.length)
+                        === '-'))) {
                     // TODO: this could be optimized (don't use regex)
                     data = data.replace(/\s*$/, '');
                 }
@@ -1191,6 +1236,7 @@ var Parser = Object.extend({
                                                                   data)]));
             }
             else if(tok.type === lexer.TOKEN_BLOCK_START) {
+                this.dropLeadingWhitespace = false;
                 var n = this.parseStatement();
                 if(!n) {
                     break;
@@ -1199,13 +1245,19 @@ var Parser = Object.extend({
             }
             else if(tok.type === lexer.TOKEN_VARIABLE_START) {
                 var e = this.parseExpression();
+                this.dropLeadingWhitespace = false;
                 this.advanceAfterVariableEnd();
                 buf.push(new nodes.Output(tok.lineno, tok.colno, [e]));
             }
-            else if(tok.type !== lexer.TOKEN_COMMENT) {
+            else if(tok.type === lexer.TOKEN_COMMENT) {
+                this.dropLeadingWhitespace = tok.value.charAt(
+                    tok.value.length - this.tokens.tags.COMMENT_END.length - 1
+                ) === '-';
+            } else {
                 // Ignore comments, otherwise this should be an error
                 this.fail('Unexpected token at top-level: ' +
                                 tok.type, tok.lineno, tok.colno);
+
             }
         }
 
@@ -1242,5 +1294,6 @@ module.exports = {
             p.extensions = extensions;
         }
         return p.parseAsRoot();
-    }
+    },
+    Parser: Parser
 };

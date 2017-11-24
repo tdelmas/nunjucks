@@ -42,7 +42,7 @@
             };
 
             var env = new Environment(new MyLoader(templatesPath));
-            var parent = env.getTemplate('fake.html');
+            var parent = env.getTemplate('fake.njk');
             expect(parent.render()).to.be('Hello World');
         });
 
@@ -61,7 +61,7 @@
             };
 
             var env = new Environment(new MyLoader(templatesPath));
-            env.getTemplate('fake.html', function(err, parent) {
+            env.getTemplate('fake.njk', function(err, parent) {
                 expect(err).to.be.a(Error);
                 expect(parent).to.be(undefined);
 

@@ -8,6 +8,8 @@ title: API
 
 Nunjucks 的 API 包括渲染模板，添加过滤器和扩展，自定义模板加载器等等。
 
+**注意**: nunjucks并不是在沙盒中运行的，所以使用用户定义的模板可能存在风险。这可能导致的风险有：在服务器上运行时敏感数据被窃取，或是在客户端运行时遭遇跨站脚本攻击(详情请查看[这里](https://github.com/mozilla/nunjucks-docs/issues/17))。
+
 ## Simple API
 
 如果你不需要深度定制，可以直接使用初级(higher-level) api 来加载和渲染模板。
@@ -43,6 +45,20 @@ var res = nunjucks.renderString('Hello {{ username }}', { username: 'James' });
 {% endapi %}
 
 {% api %}
+compile
+nunjucks.compile(str, [env], [path]);
+
+将给定的字符串编译成可重复使用的nunjucks模板对象。
+
+{% raw %}
+```js
+var template = nunjucks.compile('Hello {{ username }}');
+template.render({ username: 'James' });
+```
+{% endraw %}
+{% endapi %}
+
+{% api %}
 configure
 nunjucks.configure([path], [opts]);
 
@@ -52,7 +68,7 @@ nunjucks.configure([path], [opts]);
 * **throwOnUndefined** *(default: false)* 当输出为 null 或 undefined 会抛出异常
 * **trimBlocks** *(default: false)* 自动去除 block/tag 后面的换行符
 * **lstripBlocks** *(default: false)* 自动去除 block/tag 签名的空格
-* **watch** *(默认值: false)* 当模板变化时重新加载
+* **watch** *(默认值: false)* 当模板变化时重新加载。使用前请确保已安装可选依赖 *chokidar*。
 * **noCache** *(default: false)* 不使用缓存，每次都重新编译
 * **web** 浏览器模块的配置项
   * **useCache** *(default: false)* 是否使用缓存，否则会重新请求下载模板
@@ -61,6 +77,8 @@ nunjucks.configure([path], [opts]);
 * **tags:** *(默认值: see nunjucks syntax)* 定义模板语法，查看 [Customizing Syntax](#customizing-syntax)
 
 `configure` 返回一个 `Environment` 实例, 他提供了简单的 api 添加过滤器 (filters) 和扩展 (extensions)，可在 `Environment` 查看更多的使用方法。
+
+**注意**: 简单的API (比如说上面的`nunjucks.render`) 通常会使用最近一次调用`nunjucks.configure`时的配置。由于这种做法是隐性的，它可能会渲染出意料之外的结果，所以在大多数情况下我们不推荐使用这类简单的API(特别是用到`configure`的情况);我们推荐使用`var env = nunjucks.configure(...)`创建一个独立的环境，并调用`env.render(...)`进行渲染。
 
 ```js
 nunjucks.configure('views');
@@ -113,16 +131,16 @@ new Environment([loaders], [opts])
 
 ```js
 // the FileSystemLoader is available if in node
-var env = new Environment(new nunjucks.FileSystemLoader('views'));
+var env = new nunjucks.Environment(new nunjucks.FileSystemLoader('views'));
 
-var env = new Environment(new nunjucks.FileSystemLoader('views'),
+var env = new nunjucks.Environment(new nunjucks.FileSystemLoader('views'),
                           { autoescape: false });
 
-var env = new Environment([new nunjucks.FileSystemLoader('views'),
+var env = new nunjucks.Environment([new nunjucks.FileSystemLoader('views'),
                            new MyCustomLoader()]);
 
 // the WebLoader is available if in the browser
-var env = new Environment(new nunjucks.WebLoader('/views'));
+var env = new nunjucks.Environment(new nunjucks.WebLoader('/views'));
 ```
 {% endapi %}
 
@@ -147,7 +165,7 @@ nunjucks.render('async.html', function(err, res) {
 renderString
 env.renderString(src, [context], [callback])
 
-和 [`render`](#render1) 相同，只是渲染一个字符串而不是加载的模块。
+和 [`render`](#render) 相同，只是渲染一个字符串而不是加载的模块。
 
 {% raw %}
 ```js
@@ -305,7 +323,7 @@ new FileSystemLoader([searchPaths], [opt])
 
 **opt** 为一个对象，包含如下属性：
 
-* **watch** - 如果为 `true`，当文件系统上的模板变化了，系统会自动更新他。
+* **watch** - 如果为 `true`，当文件系统上的模板变化了，系统会自动更新他。使用前请确保已安装可选依赖 *chokidar*。
 * **noCache** - 如果为 `true`，不使用缓存，模板每次都会重新编译。
 
 ```js
@@ -327,9 +345,7 @@ new WebLoader([baseURL], [opts])
     记住，你应该在生产环境预编译模板。
 * **async** 如果为 `true`，模板会异步请求，而非同步，同时你必须使用异步 render API（调用 `render` 时传入一个 callback）。
 
-如果 **neverUpdate** 为 `true`，模板只会加载一次，以后不会变化，默认每次渲染的时候都会加载。
-
-他还能加载预编译后的模板，自动使用这些模板而不是通过 http 获取，在生产环境应该使用预编译。查看 [Precompiling Templates](#precompiling-templates)。
+他还能加载预编译后的模板，自动使用这些模板而不是通过 http 获取，在生产环境应该使用预编译。查看 [Precompiling Templates](#precompiling)。
 
 ```js
 // Load templates from /views
@@ -393,7 +409,7 @@ var MyLoader = nunjucks.Loader.extend({
 记住现在必须使用异步 api，查看 [asynchronous support](#asynchronous-support)。
 
 
-**注意**: 如果使用了异步加载器，你将不能在 `for` 循环中加载模块，但可以使用 `asyncEach` 替换之。`asyncEach` 和 `for` 相同，只是在异步的时候使用。更多查看 [Be Careful!](#be-careful)。
+  **注意**: 如果使用了异步加载器，你将不能在 `for` 循环中加载模块，但可以使用 `asyncEach` 替换之。`asyncEach` 和 `for` 相同，只是在异步的时候使用。更多查看 [Be Careful!](#be-careful!)。
 
 ## Browser Usage
 
@@ -427,7 +443,7 @@ var MyLoader = nunjucks.Loader.extend({
 
 这个方法是在开发和生产环境都使用预编译的模板，这样可以简化初始设置。但是在开发时，你需要一些工具来自动预编译，而不是手动编译。
 
-1. 开发时，使用 [grunt task](https://github.com/jlongster/grunt-nunjucks) 监听文件目录，当文件变化后自动编译成 js 文件。
+1. 开发时，使用 [grunt](https://github.com/jlongster/grunt-nunjucks)或[gulp](https://github.com/sindresorhus/gulp-nunjucks) 监听文件目录，当文件变化后自动编译成 js 文件。
 2. 使用 script 或模块加载器加载 [nunjucks-slim.js](files/nunjucks-slim.js) 和你编译的 js 文件（如 `templates.js`）。
 3. 渲染模板 ([example](#simple-api))!
 
@@ -470,6 +486,11 @@ nunjucks.precompile(path, [opts])
 * **env**: `Environment` 的实例
 * **include**: 包括额外的文件和文件夹 (folders are auto-included, files are auto-excluded)
 * **exclude**: 排除额外的文件和文件夹 (folders are auto-included, files are auto-excluded)
+* **wrapper**: `function(templates, opts)` 自定义预编译模板的输出格式。这个函数必须返回一个字符串
+    * **templates**: 由对象组成的，带有下列属性的数组:
+        * **name**: 模板名称
+        * **template**: 编译后的模板所生成的，运行在javascript上的字符串源码
+    * **opts**: 上面所有配置选项所组成的对象
 
 ```js
 var env = new nunjucks.Environment();
@@ -628,7 +649,7 @@ env.render('{{ item|lookup }}', function(err, res) {
 
 你可以添加更多的自定义扩展，nunjucks 提供了 parser api 可以对模板做更多的事。
 
-注意：当预编译时，**你必须在编译时添加这些扩展**，你应该使用 [precompiling API](#api1) (或者 [grunt task](https://github.com/jlongster/grunt-nunjucks))，而不是预编译脚本。你需要创建一个 [`Environment`](#environment)
+注意：当预编译时，**你必须在编译时添加这些扩展**，你应该使用 [precompiling API](#api1) (或者 [grunt ](https://github.com/jlongster/grunt-nunjucks)或[gulp](https://github.com/sindresorhus/gulp-nunjucks)任务)，而不是预编译脚本。你需要创建一个 [`Environment`](#environment)
  实例，添加扩展，传到预编译器中。
 
 一个扩展至少有两个字段 `tags` 和 `parse`，扩展注册一个标签名，如果运行到这个标签则调用 parse。
@@ -724,7 +745,7 @@ this.run = function(context, url, body, errorBody, callback) {
 };
 ```
 
-If you create anything interesting, make sure to
-[add it to the wiki!](https://github.com/mozilla/nunjucks/wiki/Custom-Tags)
+如果你做了些有趣的东西的话，请记得把他们
+[添加到wiki中!](https://github.com/mozilla/nunjucks/wiki/Custom-Tags)
 
 {% endraw %}

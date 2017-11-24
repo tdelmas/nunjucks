@@ -9,6 +9,7 @@ var builtin_filters = require('./filters');
 var builtin_loaders = require('./loaders');
 var runtime = require('./runtime');
 var globals = require('./globals');
+var waterfall = require('a-sync-waterfall');
 var Frame = runtime.Frame;
 var Template;
 
@@ -70,6 +71,8 @@ var Environment = Obj.extend({
         }
 
         this.initCache();
+
+        this.globals = globals();
         this.filters = {};
         this.asyncFilters = [];
         this.extensions = {};
@@ -97,6 +100,7 @@ var Environment = Obj.extend({
         extension._name = name;
         this.extensions[name] = extension;
         this.extensionsList.push(extension);
+        return this;
     },
 
     removeExtension: function(name) {
@@ -116,14 +120,15 @@ var Environment = Obj.extend({
     },
 
     addGlobal: function(name, value) {
-        globals[name] = value;
+        this.globals[name] = value;
+        return this;
     },
 
     getGlobal: function(name) {
-        if(!globals[name]) {
+        if(typeof this.globals[name] === 'undefined') {
             throw new Error('global not found: ' + name);
         }
-        return globals[name];
+        return this.globals[name];
     },
 
     addFilter: function(name, func, async) {
@@ -133,6 +138,7 @@ var Environment = Obj.extend({
             this.asyncFilters.push(name);
         }
         this.filters[name] = wrapped;
+        return this;
     },
 
     getFilter: function(name) {
@@ -147,7 +153,7 @@ var Environment = Obj.extend({
         return (isRelative && loader.resolve)? loader.resolve(parentName, filename) : filename;
     },
 
-    getTemplate: function(name, eagerCompile, parentName, cb) {
+    getTemplate: function(name, eagerCompile, parentName, ignoreMissing, cb) {
         var that = this;
         var tmpl = null;
         if(name && name.raw) {
@@ -166,14 +172,18 @@ var Environment = Obj.extend({
             eagerCompile = false;
         }
 
-        if(typeof name !== 'string') {
+        if (name instanceof Template) {
+             tmpl = name;
+        }
+        else if(typeof name !== 'string') {
             throw new Error('template names must be a string: ' + name);
         }
-
-        for (var i = 0; i < this.loaders.length; i++) {
-            var _name = this.resolveTemplate(this.loaders[i], parentName, name);
-            tmpl = this.loaders[i].cache[_name];
-            if (tmpl) break;
+        else {
+            for (var i = 0; i < this.loaders.length; i++) {
+                var _name = this.resolveTemplate(this.loaders[i], parentName, name);
+                tmpl = this.loaders[i].cache[_name];
+                if (tmpl) break;
+            }
         }
 
         if(tmpl) {
@@ -193,7 +203,9 @@ var Environment = Obj.extend({
 
             var createTemplate = function(err, info) {
                 if(!info && !err) {
-                    err = new Error('template not found: ' + name);
+                    if(!ignoreMissing) {
+                        err = new Error('template not found: ' + name);
+                    }
                 }
 
                 if (err) {
@@ -205,11 +217,18 @@ var Environment = Obj.extend({
                     }
                 }
                 else {
-                    var tmpl = new Template(info.src, _this,
+                    var tmpl;
+                    if(info) {
+                        tmpl = new Template(info.src, _this,
                                             info.path, eagerCompile);
 
-                    if(!info.noCache) {
-                        info.loader.cache[name] = tmpl;
+                        if(!info.noCache) {
+                            info.loader.cache[name] = tmpl;
+                        }
+                    }
+                    else {
+                        tmpl = new Template('', _this,
+                                            '', eagerCompile);
                     }
 
                     if(cb) {
@@ -267,6 +286,8 @@ var Environment = Obj.extend({
         };
 
         app.set('view', NunjucksView);
+        app.set('nunjucksEnv', this);
+        return this;
     },
 
     render: function(name, ctx, cb) {
@@ -305,15 +326,20 @@ var Environment = Obj.extend({
 
         var tmpl = new Template(src, this, opts.path);
         return tmpl.render(ctx, cb);
-    }
+    },
+
+    waterfall: waterfall
 });
 
 var Context = Obj.extend({
-    init: function(ctx, blocks) {
+    init: function(ctx, blocks, env) {
+        // Has to be tied to an environment so we can tap into its globals.
+        this.env = env || new Environment();
+
         // Make a duplicate of ctx
         this.ctx = {};
         for(var k in ctx) {
-            if(ctx.hasOwnProperty(k)) {
+            if(Object.prototype.hasOwnProperty.call(ctx, k)) {
                 this.ctx[k] = ctx[k];
             }
         }
@@ -329,8 +355,8 @@ var Context = Obj.extend({
     lookup: function(name) {
         // This is one of the most called functions, so optimize for
         // the typical case where the name isn't in the globals
-        if(name in globals && !(name in this.ctx)) {
-            return globals[name];
+        if(name in this.env.globals && !(name in this.ctx)) {
+            return this.env.globals[name];
         }
         else {
             return this.ctx[name];
@@ -348,6 +374,7 @@ var Context = Obj.extend({
     addBlock: function(name, block) {
         this.blocks[name] = this.blocks[name] || [];
         this.blocks[name].push(block);
+        return this;
     },
 
     getBlock: function(name) {
@@ -410,7 +437,7 @@ Template = Obj.extend({
                 _this._compile();
             }
             catch(err) {
-                throw lib.prettifyError(this.path, this.env.dev, err);
+                throw lib.prettifyError(this.path, this.env.opts.dev, err);
             }
         }
         else {
@@ -442,13 +469,13 @@ Template = Obj.extend({
         try {
             _this.compile();
         } catch (_err) {
-            var err = lib.prettifyError(this.path, this.env.dev, _err);
+            var err = lib.prettifyError(this.path, this.env.opts.dev, _err);
             if (cb) return callbackAsap(cb, err);
             else throw err;
         }
 
-        var context = new Context(ctx || {}, _this.blocks);
-        var frame = parentFrame ? parentFrame.push() : new Frame();
+        var context = new Context(ctx || {}, _this.blocks, _this.env);
+        var frame = parentFrame ? parentFrame.push(true) : new Frame();
         frame.topLevel = true;
         var syncResult = null;
 
@@ -459,7 +486,7 @@ Template = Obj.extend({
             runtime,
             function(err, res) {
                 if(err) {
-                    err = lib.prettifyError(_this.path, _this.env.dev, err);
+                    err = lib.prettifyError(_this.path, _this.env.opts.dev, err);
                 }
 
                 if(cb) {
@@ -504,7 +531,7 @@ Template = Obj.extend({
         frame.topLevel = true;
 
         // Run the rootRenderFunc to populate the context with exported vars
-        var context = new Context(ctx || {}, this.blocks);
+        var context = new Context(ctx || {}, this.blocks, this.env);
         this.rootRenderFunc(this.env,
                             context,
                             frame,

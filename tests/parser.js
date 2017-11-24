@@ -11,9 +11,9 @@
     }
     else {
         expect = window.expect;
-        lib = nunjucks.require('lib');
-        nodes = nunjucks.require('nodes');
-        parser = nunjucks.require('parser');
+        lib = nunjucks.lib;
+        nodes = nunjucks.nodes;
+        parser = nunjucks.parser;
     }
 
     function _isAST(node1, node2) {
@@ -289,10 +289,47 @@
             n = parser.parse('{% block foo %}stuff{% endblock %}');
             expect(n.children[0].typename).to.be('Block');
 
-            n = parser.parse('{% extends "test.html" %}stuff');
+            n = parser.parse('{% block foo %}stuff{% endblock foo %}');
+            expect(n.children[0].typename).to.be('Block');
+
+            n = parser.parse('{% extends "test.njk" %}stuff');
             expect(n.children[0].typename).to.be('Extends');
 
-            n = parser.parse('{% include "test.html" %}');
+            n = parser.parse('{% include "test.njk" %}');
+            expect(n.children[0].typename).to.be('Include');
+        });
+
+        it('should accept attributes and methods of static arrays, objects and primitives', function() {
+            expect(function () {
+                parser.parse('{{ ([1, 2, 3]).indexOf(1) }}');
+            }).to.not.throwException();
+
+            expect(function () {
+                parser.parse('{{ [1, 2, 3].length }}');
+            }).to.not.throwException();
+
+            expect(function () {
+                parser.parse('{{ "Some String".replace("S", "$") }}');
+            }).to.not.throwException();
+
+            expect(function () {
+                parser.parse('{{ ({ name : "Khalid" }).name }}');
+            }).to.not.throwException();
+
+            expect(function () {
+                parser.parse('{{ 1.618.toFixed(2) }}');
+            }).to.not.throwException();
+        });
+
+        it('should parse include tags', function() {
+
+            var n = parser.parse('{% include "test.njk" %}');
+            expect(n.children[0].typename).to.be('Include');
+
+            n = parser.parse('{% include "test.html"|replace("html","j2") %}');
+            expect(n.children[0].typename).to.be('Include');
+
+            n = parser.parse('{% include ""|default("test.njk") %}');
             expect(n.children[0].typename).to.be('Include');
         });
 
@@ -484,6 +521,69 @@
                    [nodes.Output, [nodes.TemplateData, '\n']]]);
         });
 
+        it('should parse verbatim', function() {
+            isAST(parser.parse('{% verbatim %}hello {{ {% %} }}{% endverbatim %}'),
+                [nodes.Root,
+                    [nodes.Output,
+                        [nodes.TemplateData, 'hello {{ {% %} }}']]]);
+        });
+
+        it('should parse verbatim with broken variables', function() {
+            isAST(parser.parse('{% verbatim %}{{ x }{% endverbatim %}'),
+                [nodes.Root,
+                    [nodes.Output,
+                        [nodes.TemplateData, '{{ x }']]]);
+        });
+
+        it('should parse verbatim with broken blocks', function() {
+            isAST(parser.parse('{% verbatim %}{% if i_am_stupid }Still do your job well{% endverbatim %}'),
+                [nodes.Root,
+                    [nodes.Output,
+                        [nodes.TemplateData, '{% if i_am_stupid }Still do your job well']]]);
+        });
+
+        it('should parse verbatim with pure text', function() {
+            isAST(parser.parse('{% verbatim %}abc{% endverbatim %}'),
+                [nodes.Root,
+                    [nodes.Output,
+                        [nodes.TemplateData, 'abc']]]);
+        });
+
+
+        it('should parse verbatim with verbatim blocks', function() {
+            isAST(parser.parse('{% verbatim %}{% verbatim %}{{ x }{% endverbatim %}{% endverbatim %}'),
+                [nodes.Root,
+                    [nodes.Output,
+                        [nodes.TemplateData, '{% verbatim %}{{ x }{% endverbatim %}']]]);
+        });
+
+        it('should parse verbatim with comment blocks', function() {
+            isAST(parser.parse('{% verbatim %}{# test {% endverbatim %}'),
+                [nodes.Root,
+                    [nodes.Output,
+                        [nodes.TemplateData, '{# test ']]]);
+        });
+
+        it('should parse multiple verbatim blocks', function() {
+            isAST(parser.parse('{% verbatim %}{{ var }}{% endverbatim %}{{ var }}{% verbatim %}{{ var }}{% endverbatim %}'),
+                [nodes.Root,
+                    [nodes.Output, [nodes.TemplateData, '{{ var }}']],
+                    [nodes.Output, [nodes.Symbol, 'var']],
+                    [nodes.Output, [nodes.TemplateData, '{{ var }}']]]);
+        });
+
+        it('should parse multiline multiple verbatim blocks', function() {
+            isAST(parser.parse('\n{% verbatim %}{{ var }}{% endverbatim %}\n{{ var }}\n{% verbatim %}{{ var }}{% endverbatim %}\n'),
+                [nodes.Root,
+                    [nodes.Output, [nodes.TemplateData, '\n']],
+                    [nodes.Output, [nodes.TemplateData, '{{ var }}']],
+                    [nodes.Output, [nodes.TemplateData, '\n']],
+                    [nodes.Output, [nodes.Symbol, 'var']],
+                    [nodes.Output, [nodes.TemplateData, '\n']],
+                    [nodes.Output, [nodes.TemplateData, '{{ var }}']],
+                    [nodes.Output, [nodes.TemplateData, '\n']]]);
+        });
+
         it('should parse keyword and non-keyword arguments', function() {
             isAST(parser.parse('{{ foo("bar", falalalala, baz="foobar") }}'),
                   [nodes.Root,
@@ -500,17 +600,47 @@
         });
 
         it('should parse imports', function() {
-            isAST(parser.parse('{% import "foo/bar.html" as baz %}'),
+            isAST(parser.parse('{% import "foo/bar.njk" as baz %}'),
                   [nodes.Root,
                    [nodes.Import,
-                    [nodes.Literal, 'foo/bar.html'],
+                    [nodes.Literal, 'foo/bar.njk'],
                     [nodes.Symbol, 'baz']]]);
 
-            isAST(parser.parse('{% from "foo/bar.html" import baz, ' +
+            isAST(parser.parse('{% from "foo/bar.njk" import baz, ' +
                                '   foobar as foobarbaz %}'),
                   [nodes.Root,
                    [nodes.FromImport,
-                    [nodes.Literal, 'foo/bar.html'],
+                    [nodes.Literal, 'foo/bar.njk'],
+                    [nodes.NodeList,
+                     [nodes.Symbol, 'baz'],
+                     [nodes.Pair,
+                      [nodes.Symbol, 'foobar'],
+                      [nodes.Symbol, 'foobarbaz']]]]]);
+
+            isAST(parser.parse('{% import "foo/bar.html"|replace("html", "j2") as baz %}'),
+                  [nodes.Root,
+                   [nodes.Import,
+                    [nodes.Filter, 
+                     [nodes.Symbol, 'replace'],
+                     [nodes.NodeList,
+                      [nodes.Literal, 'foo/bar.html'],
+                      [nodes.Literal, 'html'],
+                      [nodes.Literal, 'j2']
+                     ]
+                    ],
+                    [nodes.Symbol, 'baz']]]);
+
+            isAST(parser.parse('{% from ""|default("foo/bar.njk") import baz, ' +
+                               '   foobar as foobarbaz %}'),
+                  [nodes.Root,
+                   [nodes.FromImport,
+                    [nodes.Filter, 
+                     [nodes.Symbol, 'default'],
+                     [nodes.NodeList,
+                      [nodes.Literal, ''],
+                      [nodes.Literal, 'foo/bar.njk']
+                     ]
+                    ],
                     [nodes.NodeList,
                      [nodes.Symbol, 'baz'],
                      [nodes.Pair,
@@ -564,6 +694,30 @@
                      [nodes.Output,
                       [nodes.TemplateData, 'hi']]]]]);
 
+            isAST(parser.parse('hello \n{#- comment #}'),
+                  [nodes.Root,
+                   [nodes.Output,
+                    [nodes.TemplateData, 'hello']]]);
+
+            isAST(parser.parse('{# comment -#} \n world'),
+                  [nodes.Root,
+                   [nodes.Output,
+                    [nodes.TemplateData, 'world']]]);
+
+            isAST(parser.parse('hello \n{#- comment -#} \n world'),
+                  [nodes.Root,
+                   [nodes.Output,
+                    [nodes.TemplateData, 'hello']],
+                   [nodes.Output,
+                    [nodes.TemplateData, 'world']]]);
+
+            isAST(parser.parse('hello \n{# - comment - #} \n world'),
+                  [nodes.Root,
+                   [nodes.Output,
+                    [nodes.TemplateData, 'hello \n']],
+                   [nodes.Output,
+                    [nodes.TemplateData, ' \n world']]]);
+
             // The from statement required a special case so make sure to
             // test it
             isAST(parser.parse('{% from x import y %}\n  hi \n'),
@@ -583,6 +737,46 @@
                      [nodes.Symbol, 'y']]],
                    [nodes.Output,
                     [nodes.TemplateData, 'hi \n']]]);
+
+            isAST(parser.parse('{% if x -%}{{y}} {{z}}{% endif %}'),
+                  [nodes.Root,
+                   [nodes.If,
+                    [nodes.Symbol, 'x'],
+                    [nodes.NodeList,
+                     [nodes.Output,
+                      [nodes.Symbol, 'y']],
+                     [nodes.Output,
+                      // the value of TemplateData should be ' ' instead of ''
+                      [nodes.TemplateData, ' ']],
+                     [nodes.Output,
+                      [nodes.Symbol, 'z']]]]]);
+
+            isAST(parser.parse('{% if x -%}{% if y %} {{z}}{% endif %}{% endif %}'),
+                [nodes.Root,
+                 [nodes.If,
+                  [nodes.Symbol, 'x'],
+                  [nodes.NodeList,
+                   [nodes.If,
+                    [nodes.Symbol, 'y'],
+                    [nodes.NodeList,
+                      [nodes.Output,
+                        // the value of TemplateData should be ' ' instead of ''
+                       [nodes.TemplateData, ' ']],
+                      [nodes.Output,
+                       [nodes.Symbol, 'z']]
+                      ]]]]]);
+
+            isAST(parser.parse('{% if x -%}{# comment #} {{z}}{% endif %}'),
+                 [nodes.Root,
+                  [nodes.If,
+                   [nodes.Symbol, 'x'],
+                   [nodes.NodeList,
+                    [nodes.Output,
+                     // the value of TemplateData should be ' ' instead of ''
+                     [nodes.TemplateData, ' ']],
+                    [nodes.Output,
+                     [nodes.Symbol, 'z']]]]]);
+
         });
 
         it('should throw errors', function() {
@@ -604,11 +798,15 @@
 
             expect(function() {
                 parser.parse('hello {% if sdf %} data');
-            }).to.throwException(/expected endif, else, or endif/);
+            }).to.throwException(/expected elif, else, or endif/);
 
             expect(function() {
                 parser.parse('hello {% block sdf %} data');
             }).to.throwException(/expected endblock/);
+
+            expect(function() {
+                parser.parse('hello {% block sdf %} data{% endblock foo %}');
+            }).to.throwException(/expected block end/);
 
             expect(function() {
                 parser.parse('hello {% bar %} dsfsdf');

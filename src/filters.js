@@ -10,12 +10,8 @@ function normalize(value, defaultValue) {
     return value;
 }
 
-var hasWarnedDefault = false;
-
 var filters = {
-    abs: function(n) {
-        return Math.abs(n);
-    },
+    abs: Math.abs,
 
     batch: function(arr, linecount, fill_with) {
         var i;
@@ -65,18 +61,6 @@ var filters = {
     },
 
     'default': function(val, def, bool) {
-        if(bool !== true && bool !== false && !hasWarnedDefault) {
-            hasWarnedDefault = true;
-            console.log(
-                '[nunjucks] Warning: the "default" filter was used without ' +
-                'specifying the type of comparison. 2.0 changed the default ' +
-                'behavior from boolean (val ? val : def) to strictly undefined, ' +
-                'so you should make sure that doesn\'t break anything. ' +
-                'Be explicit about this to make this warning go away, or wait until 2.1. ' +
-                'See http://mozilla.github.io/nunjucks/templating.html#defaultvalue-default-boolean'
-            );
-        }
-
         if(bool) {
             return val ? val : def;
         }
@@ -125,20 +109,24 @@ var filters = {
         return array;
     },
 
-    dump: function(obj) {
-        return JSON.stringify(obj);
+    dump: function(obj, spaces) {
+        return JSON.stringify(obj, null, spaces);
     },
 
     escape: function(str) {
-        if(typeof str === 'string' ||
-           str instanceof r.SafeString) {
-            return lib.escape(str);
+        if(str instanceof r.SafeString) {
+            return str;
         }
-        return str;
+        str = (str === null || str === undefined) ? '' : str;
+        return r.markSafe(lib.escape(str.toString()));
     },
 
     safe: function(str) {
-        return r.markSafe(str);
+        if (str instanceof r.SafeString) {
+            return str;
+        }
+        str = (str === null || str === undefined) ? '' : str;
+        return r.markSafe(str.toString());
     },
 
     first: function(arr) {
@@ -190,7 +178,21 @@ var filters = {
     length: function(val) {
         var value = normalize(val, '');
 
-        return value !== undefined ? value.length : 0;
+        if(value !== undefined) {
+            if(
+                (typeof Map === 'function' && value instanceof Map) ||
+                (typeof Set === 'function' && value instanceof Set)
+            ) {
+                // ECMAScript 2015 Maps and Sets
+                return value.size;
+            }
+            if(lib.isObject(value) && !(value instanceof r.SafeString)) {
+                // Objects (besides SafeStrings), non-primative Arrays
+                return Object.keys(value).length;
+            }
+            return value.length;
+        }
+        return 0;
     },
 
     list: function(val) {
@@ -225,6 +227,13 @@ var filters = {
     lower: function(str) {
         str = normalize(str, '');
         return str.toLowerCase();
+    },
+
+    nl2br: function(str) {
+        if (str === null || str === undefined) {
+            return '';
+        }
+        return r.copySafeness(str, str.replace(/\r\n|\n/g, '<br />\n'));
     },
 
     random: function(arr) {
@@ -373,6 +382,26 @@ var filters = {
         return res;
     },
 
+    sum: function(arr, attr, start) {
+        var sum = 0;
+
+        if(typeof start === 'number'){
+            sum += start;
+        }
+
+        if(attr) {
+            arr = lib.map(arr, function(v) {
+                return v[attr];
+            });
+        }
+
+        for(var i = 0; i < arr.length; i++) {
+            sum += arr[i];
+        }
+
+        return sum;
+    },
+
     sort: r.makeMacro(['value', 'reverse', 'case_sensitive', 'attribute'], [], function(arr, reverse, caseSens, attr) {
          // Copy it
         arr = lib.map(arr, function(v) { return v; });
@@ -410,6 +439,24 @@ var filters = {
 
     string: function(obj) {
         return r.copySafeness(obj, obj);
+    },
+
+    striptags: function(input, preserve_linebreaks) {
+        input = normalize(input, '');
+        preserve_linebreaks = preserve_linebreaks || false;
+        var tags = /<\/?([a-z][a-z0-9]*)\b[^>]*>|<!--[\s\S]*?-->/gi;
+        var trimmedInput = filters.trim(input.replace(tags, ''));
+        var res = '';
+        if (preserve_linebreaks) {
+            res = trimmedInput
+                .replace(/^ +| +$/gm, '')     // remove leading and trailing spaces
+                .replace(/ +/g, ' ')          // squash adjacent spaces
+                .replace(/(\r\n)/g, '\n')     // normalize linebreaks (CRLF -> LF)
+                .replace(/\n\n\n+/g, '\n\n'); // squash abnormal adjacent linebreaks
+        } else {
+            res = trimmedInput.replace(/\s+/gi, ' ');
+        }
+        return r.copySafeness(input, res);
     },
 
     title: function(str) {
@@ -466,7 +513,7 @@ var filters = {
             } else {
                 parts = [];
                 for (var k in obj) {
-                    if (obj.hasOwnProperty(k)) {
+                    if (Object.prototype.hasOwnProperty.call(obj, k)) {
                         parts.push(enc(k) + '=' + enc(obj[k]));
                     }
                 }
@@ -489,7 +536,7 @@ var filters = {
         var wwwRE = /^www\./;
         var tldRE = /\.(?:org|net|com)(?:\:|\/|$)/;
 
-        var words = str.split(/\s+/).filter(function(word) {
+        var words = str.split(/(\s+)/).filter(function(word) {
           // If the word has no length, bail. This can happen for str with
           // trailing whitespace.
           return word && word.length;
@@ -517,7 +564,7 @@ var filters = {
 
         });
 
-        return words.join(' ');
+        return words.join('');
     },
 
     wordcount: function(str) {

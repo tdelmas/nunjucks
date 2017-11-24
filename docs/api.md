@@ -9,17 +9,18 @@ title: API
 The API for nunjucks covers rendering templates, adding filters and
 extensions, customizing template loading, and more.
 
-## Simple API
-
-If you don't need deep customization of the system, you can use this simple
-higher-level API for loading and rendering templates.
-
 **Warning**: nunjucks does not sandbox execution so it is potentially
   unsafe to run user-defined templates. On the server, you may expose
   attack vectors for accessing sensitive data. On the client, you may
   expose cross-site scripting vulnerabilities (see [this
   issue](https://github.com/mozilla/nunjucks-docs/issues/17) for more
   information).
+
+
+## Simple API
+
+If you don't need deep customization of the system, you can use this simple
+higher-level API for loading and rendering templates.
 
 {% endraw %}
 {% api %}
@@ -84,11 +85,11 @@ directory, and the following options are available in **opts**:
 * **throwOnUndefined** *(default: false)* throw errors when outputting a null/undefined value
 * **trimBlocks** *(default: false)* automatically remove trailing newlines from a block/tag
 * **lstripBlocks** *(default: false)* automatically remove leading whitespace from a block/tag
-* **watch** *(default: false)* reload templates when they are changed (server-side)
+* **watch** *(default: false)* reload templates when they are changed (server-side). To use watch, make sure optional dependency *chokidar* is installed.
 * **noCache** *(default: false)* never use a cache and recompile templates each time (server-side)
 * **web** an object for configuring loading templates in the browser:
   * **useCache** *(default: false)* will enable cache and templates will never see updates.
-  * **async** *(default: false)* will load templates asynchronously instead of synchronously.
+  * **async** *(default: false)* will load templates asynchronously instead of synchronously (requires use of the [asynchronous API](#asynchronous-support) for rendering).
 * **express** an express app that nunjucks should install to
 * **tags:** *(default: see nunjucks syntax)* defines the syntax for
     nunjucks tags. See [Customizing Syntax](#customizing-syntax)
@@ -96,6 +97,13 @@ directory, and the following options are available in **opts**:
 `configure` returns an `Environment` instance, which lets you add
 filters and extensions while still using the simple API. See below for
 more information on `Environment`.
+
+**Warning**: The simple API (above; e.g. `nunjucks.render`) always uses the
+  configuration from the most recent call to `nunjucks.configure`. Since this
+  is implicit and can result in unexpected side effects, use of the simple API
+  is discouraged in most cases (especially if `configure` is used); instead,
+  explicitly create an environment using `var env = nunjucks.configure(...)`
+  and then call `env.render(...)` etc.
 
 ```js
 nunjucks.configure('views');
@@ -123,12 +131,13 @@ nunjucks.installJinjaCompat()
 
 This installs experimental support for more consistent Jinja
 compatibility by adding Pythonic APIs to the environment. While
-nunjucks does not aim for complete Jinja/Python compatiblity, this
+nunjucks does not aim for complete Jinja/Python compatibility, this
 might help users seeking just that.
 
 This adds `True` and `False` which map to the JS `true` and `false`
-values, as well as augmenting arrays and objects with Python-style
-methods. [Check out the source](https://github.com/mozilla/nunjucks/blob/master/src/jinja-compat.js)
+values, allows use of Python slice syntax, and augments arrays and
+objects with Python-style methods.
+[Check out the source](https://github.com/mozilla/nunjucks/blob/master/src/jinja-compat.js)
 to see everything it adds.
 {% endapi %}
 {% raw %}
@@ -175,16 +184,16 @@ the browser. See [`Loader`](#loader) for more information.
 
 ```js
 // the FileSystemLoader is available if in node
-var env = new Environment(new nunjucks.FileSystemLoader('views'));
+var env = new nunjucks.Environment(new nunjucks.FileSystemLoader('views'));
 
-var env = new Environment(new nunjucks.FileSystemLoader('views'),
+var env = new nunjucks.Environment(new nunjucks.FileSystemLoader('views'),
                           { autoescape: false });
 
-var env = new Environment([new nunjucks.FileSystemLoader('views'),
+var env = new nunjucks.Environment([new nunjucks.FileSystemLoader('views'),
                            new MyCustomLoader()]);
 
 // the WebLoader is available if in the browser
-var env = new Environment(new nunjucks.WebLoader('/views'));
+var env = new nunjucks.Environment(new nunjucks.WebLoader('/views'));
 ```
 {% endapi %}
 
@@ -228,7 +237,7 @@ env.addFilter(name, func, [async])
 
 Add a custom filter named **name** which calls **func** whenever
 invoked. If the filter needs to be async, **async** must be `true`
-(see [asynchronous support](#asynchronous-support)). See
+(see [asynchronous support](#asynchronous-support)). Returns `env` for further method chaining. See
 [Custom Filters](#custom-filters).
 
 {% endapi %}
@@ -244,7 +253,7 @@ addExtension
 env.addExtension(name, ext)
 
 Add the custom extension **ext** named **name**. **ext** is an object
-with a few specific methods that are called by the extension system.
+with a few specific methods that are called by the extension system. Returns `env` for further method chaining.
 See [Custom Tags](#custom-tags).
 
 {% endapi %}
@@ -273,6 +282,7 @@ Return true if a custom extension named **name** has been added.
 addGlobal
 env.addGlobal(name, value)
 Add a global value that will be available to all templates. Note: this will overwrite any existing global called `name`.
+Returns `env` for further method chaining.
 {% endapi %}
 
 {% api %}
@@ -309,7 +319,7 @@ env.express(app)
 Install nunjucks as the rendering engine for the express **app**.
 After doing this, you can use express normally. Note that you can do
 this automatically with the simple API call [`configure`](#configure)
-by passing in the app as the **express** option.
+by passing in the app as the **express** option. Returns `env` for further method chaining.
 
 ```js
 var app = express();
@@ -393,7 +403,7 @@ templates live, and it defaults to the current working directory.
 
 **opts** is an object with the following optional properties:
 
-* **watch** - if `true`, the system will automatically update templates
+* **watch** - if `true`, the system will automatically update templates. To use watch, make sure optional dependency *chokidar* is installed.
   when they are changed on the filesystem
 * **noCache** - if `true`, the system will avoid using a cache and templates
   will be recompiled every single time
@@ -466,7 +476,7 @@ var MyLoader = nunjucks.Loader.extend({
         // setup a process which watches templates here
         // and call `this.emit('update', name)` when a template
         // is changed
-    }
+    },
 
     getSource: function(name) {
         // load the template
@@ -564,9 +574,9 @@ production, which simplifies the setup. However, you're going to want
 something that automatically recompiles templates while developing
 unless you want to manually recompile them after every change.
 
-1. For development, use the [grunt task](https://github.com/jlongster/grunt-nunjucks) to watch
-your template directory for changes and automatically [precompile](#precompiling) them
-into a js file
+1. For development, use the [grunt](https://github.com/jlongster/grunt-nunjucks) or
+[gulp](https://github.com/sindresorhus/gulp-nunjucks) tasks to watch your template
+directory for changes and automatically [precompile](#precompiling) them into a js file
 2. Load [nunjucks-slim.js](files/nunjucks-slim.js) and `templates.js`, or whatever you named
 the precompiled js file, with either a script tag or a module loader.
 3. Render templates ([example](#simple-api))!
@@ -630,6 +640,11 @@ Precompile a file or directory at **path**. **opts** is a hash with any of the f
 * **env**: the Environment to use (gets extensions and async filters from it)
 * **include**: array of file/folders to include (folders are auto-included, files are auto-excluded)
 * **exclude**: array of file/folders to exclude (folders are auto-included, files are auto-excluded)
+* **wrapper**: `function(templates, opts)` Customize the output format of the precompiled templates. This function must return a string
+    * **templates**: array of objects with the following properties:
+        * **name**: name of the template
+        * **template**: string source of the precompiled template in javascript
+    * **opts**: object of all the above options
 
 ```js
 var env = new nunjucks.Environment();
@@ -834,8 +849,9 @@ with the template.
 
 Note: When precompiling, **you must install the extensions at
 compile-time**. You have to use the [precompiling API](#api1) (or the
-[grunt task](https://github.com/jlongster/grunt-nunjucks)) instead of
-the script. You'll want to create a [`Environment`](#environment)
+[grunt](https://github.com/jlongster/grunt-nunjucks) or
+[gulp](https://github.com/sindresorhus/gulp-nunjucks) tasks) instead of
+the script. You'll want to create an [`Environment`](#environment)
 object, install your extensions, and pass it to the precompiler.
 
 An extension is a javascript object with at least two fields: `tags`

@@ -12,7 +12,9 @@ var Frame = require('./runtime').Frame;
 // through
 var compareOps = {
     '==': '==',
+    '===': '===',
     '!=': '!=',
+    '!==': '!==',
     '<': '<',
     '>': '>',
     '<=': '<=',
@@ -364,11 +366,11 @@ var Compiler = Object.extend({
     },
 
     compileIn: function(node, frame) {
-      this.emit('(');
-      this.compile(node.right, frame);
-      this.emit('.indexOf(');
+      this.emit('runtime.inOperator(');
       this.compile(node.left, frame);
-      this.emit(') !== -1)');
+      this.emit(',');
+      this.compile(node.right, frame);
+      this.emit(')');
     },
 
     compileOr: binOpEmitter(' || '),
@@ -441,7 +443,7 @@ var Compiler = Object.extend({
                 return this._getNodeName(node.target) + '["' +
                        this._getNodeName(node.val) + '"]';
             case 'Literal':
-                return node.value.toString().substr(0, 10);
+                return node.value.toString();
             default:
                 return '--expression--';
         }
@@ -471,7 +473,6 @@ var Compiler = Object.extend({
     compileFilter: function(node, frame) {
         var name = node.name;
         this.assertType(name, nodes.Symbol);
-
         this.emit('env.getFilter("' + name.value + '").call(context, ');
         this._compileAggregate(node.args, frame);
         this.emit(')');
@@ -523,9 +524,16 @@ var Compiler = Object.extend({
             ids.push(id);
         }, this);
 
-        this.emit(ids.join(' = ') + ' = ');
-        this._compileExpression(node.value, frame);
-        this.emitLine(';');
+        if (node.value) {
+          this.emit(ids.join(' = ') + ' = ');
+          this._compileExpression(node.value, frame);
+          this.emitLine(';');
+        }
+        else {
+          this.emit(ids.join(' = ') + ' = ');
+          this.compile(node.body, frame);
+          this.emitLine(';');
+        }
 
         lib.each(node.targets, function(target, i) {
             var id = ids[i];
@@ -581,7 +589,7 @@ var Compiler = Object.extend({
     compileIfAsync: function(node, frame) {
         this.emit('(function(cb) {');
         this.compileIf(node, frame, true);
-        this.emit('})(function() {');
+        this.emit('})(' + this.makeCallback());
         this.addScopeLevel();
     },
 
@@ -791,6 +799,7 @@ var Compiler = Object.extend({
         var args = [];
         var kwargs = null;
         var funcId = 'macro_' + this.tmpid();
+        var keepFrame = (frame !== undefined);
 
         // Type check the definition of the args
         lib.each(node.args.children, function(arg, i) {
@@ -816,15 +825,20 @@ var Compiler = Object.extend({
         // arguments so support setting positional args with keywords
         // args and passing keyword args as positional args
         // (essentially default values). See runtime.js.
-        frame = frame.push();
+        if (keepFrame) {
+            frame = frame.push(true);
+        } else {
+            frame = new Frame();
+        }
         this.emitLines(
             'var ' + funcId + ' = runtime.makeMacro(',
             '[' + argNames.join(', ') + '], ',
             '[' + kwargNames.join(', ') + '], ',
             'function (' + realNames.join(', ') + ') {',
-            'frame = frame.push();',
+            'var callerFrame = frame;',
+            'frame = ' + ((keepFrame) ? 'frame.push(true);' : 'new runtime.Frame();'),
             'kwargs = kwargs || {};',
-            'if (kwargs.hasOwnProperty("caller")) {',
+            'if (Object.prototype.hasOwnProperty.call(kwargs, "caller")) {',
             'frame.set("caller", kwargs.caller); }'
         );
 
@@ -842,7 +856,7 @@ var Compiler = Object.extend({
             lib.each(kwargs.children, function(pair) {
                 var name = pair.key.value;
                 this.emit('frame.set("' + name + '", ' +
-                          'kwargs.hasOwnProperty("' + name + '") ? ' +
+                          'Object.prototype.hasOwnProperty.call(kwargs, "' + name + '") ? ' +
                           'kwargs["' + name + '"] : ');
                 this._compileExpression(pair.value, frame);
                 this.emitLine(');');
@@ -856,8 +870,7 @@ var Compiler = Object.extend({
           this.compile(node.body, frame);
         });
 
-        frame = frame.pop();
-        this.emitLine('frame = frame.pop();');
+        this.emitLine('frame = ' + ((keepFrame) ? 'frame.pop();' : 'callerFrame;'));
         this.emitLine('return new runtime.SafeString(' + bufferId + ');');
         this.emitLine('});');
         this.popBufferId();
@@ -866,7 +879,7 @@ var Compiler = Object.extend({
     },
 
     compileMacro: function(node, frame) {
-        var funcId = this._compileMacro(node, frame);
+        var funcId = this._compileMacro(node);
 
         // Expose the macro to the templates
         var name = node.name.value;
@@ -896,7 +909,7 @@ var Compiler = Object.extend({
 
         this.emit('env.getTemplate(');
         this._compileExpression(node.template, frame);
-        this.emitLine(', false, '+this._templateName()+', ' + this.makeCallback(id));
+        this.emitLine(', false, '+this._templateName()+', false, ' + this.makeCallback(id));
         this.addScopeLevel();
 
         this.emitLine(id + '.getExported(' +
@@ -919,7 +932,7 @@ var Compiler = Object.extend({
 
         this.emit('env.getTemplate(');
         this._compileExpression(node.template, frame);
-        this.emitLine(', false, '+this._templateName()+', ' + this.makeCallback(importedId));
+        this.emitLine(', false, '+this._templateName()+', false, ' + this.makeCallback(importedId));
         this.addScopeLevel();
 
         this.emitLine(importedId + '.getExported(' +
@@ -941,7 +954,7 @@ var Compiler = Object.extend({
                 alias = name;
             }
 
-            this.emitLine('if(' + importedId + '.hasOwnProperty("' + name + '")) {');
+            this.emitLine('if(Object.prototype.hasOwnProperty.call(' + importedId + ', "' + name + '")) {');
             this.emitLine('var ' + id + ' = ' + importedId + '.' + name + ';');
             this.emitLine('} else {');
             this.emitLine('cb(new Error("cannot import \'' + name + '\'")); return;');
@@ -1002,7 +1015,7 @@ var Compiler = Object.extend({
 
         this.emit('env.getTemplate(');
         this._compileExpression(node.template, frame);
-        this.emitLine(', true, '+this._templateName()+', ' + this.makeCallback('_parentTemplate'));
+        this.emitLine(', true, '+this._templateName()+', false, ' + this.makeCallback('_parentTemplate'));
 
         // extends is a dynamic tag and can occur within a block like
         // `if`, so if this happens we need to capture the parent
@@ -1021,19 +1034,49 @@ var Compiler = Object.extend({
         var id = this.tmpid();
         var id2 = this.tmpid();
 
+        this.emitLine('var tasks = [];');
+        this.emitLine('tasks.push(');
+        this.emitLine('function(callback) {');
         this.emit('env.getTemplate(');
         this._compileExpression(node.template, frame);
-        this.emitLine(', false, '+this._templateName()+', '+ this.makeCallback(id));
-        this.addScopeLevel();
+        this.emitLine(', false, '+this._templateName()+', ' + node.ignoreMissing + ', ' + this.makeCallback(id));
+        this.emitLine('callback(null,' + id + ');});');
+        this.emitLine('});');
 
-        this.emitLine(id + '.render(' +
-                      'context.getVariables(), frame, ' + this.makeCallback(id2));
-        this.emitLine(this.buffer + ' += ' + id2);
+        this.emitLine('tasks.push(');
+        this.emitLine('function(template, callback){');
+        this.emitLine('template.render(' +
+            'context.getVariables(), frame, ' + this.makeCallback(id2));
+        this.emitLine('callback(null,' + id2 + ');});');
+        this.emitLine('});');
+
+        this.emitLine('tasks.push(');
+        this.emitLine('function(result, callback){');
+        this.emitLine(this.buffer + ' += result;');
+        this.emitLine('callback(null);');
+        this.emitLine('});');
+        this.emitLine('env.waterfall(tasks, function(){');
         this.addScopeLevel();
     },
 
     compileTemplateData: function(node, frame) {
         this.compileLiteral(node, frame);
+    },
+
+    compileCapture: function(node, frame) {
+        // we need to temporarily override the current buffer id as 'output'
+        // so the set block writes to the capture output instead of the buffer
+        var buffer = this.buffer;
+        this.buffer = 'output';
+        this.emitLine('(function() {');
+        this.emitLine('var output = "";');
+        this.withScopedSyntax(function () {
+            this.compile(node.body, frame);
+        });
+        this.emitLine('return output;');
+        this.emitLine('})()');
+        // and of course, revert back to the old buffer id
+        this.buffer = buffer;
     },
 
     compileOutput: function(node, frame) {
@@ -1081,14 +1124,22 @@ var Compiler = Object.extend({
 
         this.inBlock = true;
 
+        var blockNames = [];
+
         var i, name, block, blocks = node.findAll(nodes.Block);
         for (i = 0; i < blocks.length; i++) {
             block = blocks[i];
             name = block.name.value;
 
+            if (blockNames.indexOf(name) !== -1) {
+                throw new Error('Block "' + name + '" defined more than once.');
+            }
+            blockNames.push(name);
+
             this.emitFuncBegin('b_' + name);
 
             var tmpFrame = new Frame();
+            this.emitLine('var frame = frame.push(true);');
             this.compile(block.body, tmpFrame);
             this.emitFuncEnd();
         }

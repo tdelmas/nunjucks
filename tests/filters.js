@@ -12,8 +12,8 @@
     else {
         expect = window.expect;
         util = window.util;
-        lib = nunjucks.require('lib');
-        r = nunjucks.require('runtime');
+        lib = nunjucks.lib;
+        r = nunjucks.runtime;
     }
 
     var render = util.render;
@@ -21,6 +21,7 @@
     var finish = util.finish;
 
     describe('filter', function() {
+
         it('abs', function(done) {
             equal('{{ -3|abs }}', '3');
             equal('{{ -3.456|abs }}', '3.456');
@@ -85,8 +86,66 @@
             finish(done);
         });
 
+        it('dump', function(done) {
+            equal('{{ [\'a\', 1, {b: true}] | dump  }}',
+                '[&quot;a&quot;,1,{&quot;b&quot;:true}]');
+            equal('{{ [\'a\', 1, {b: true}] | dump(2) }}',
+                '[\n  &quot;a&quot;,\n  1,\n  {\n    &quot;b&quot;: true\n  }\n]');
+            equal('{{ [\'a\', 1, {b: true}] | dump(4) }}',
+                '[\n    &quot;a&quot;,\n    1,\n    {\n        &quot;b&quot;: true\n    }\n]' );
+            equal('{{ [\'a\', 1, {b: true}] | dump(\'\t\') }}',
+                '[\n\t&quot;a&quot;,\n\t1,\n\t{\n\t\t&quot;b&quot;: true\n\t}\n]');
+            finish(done);
+        });
+
         it('escape', function(done) {
             var res = render('{{ "<html>" | escape }}', {}, { autoescape: false });
+            expect(res).to.be('&lt;html&gt;');
+            finish(done);
+        });
+
+        it('escape skip safe', function(done) {
+            var res = render('{{ "<html>" | safe | escape }}', {}, { autoescape: false });
+            expect(res).to.be('<html>');
+            finish(done);
+        });
+
+        it('should not double escape strings', function(done) {
+            var res = render('{{ "<html>" | escape | escape }}', {}, { autoescape: false });
+            expect(res).to.be('&lt;html&gt;');
+            finish(done);
+        });
+
+        it('should not double escape with autoescape on', function(done) {
+            var res = render('{% set val = "<html>" | escape %}{{ val }}', {}, { autoescape: true });
+            expect(res).to.be('&lt;html&gt;');
+            finish(done);
+        });
+
+        it('should work with non-string values', function(done) {
+            var res1 = render('{{ foo | escape }}', {foo: ['<html>']}, { autoescape: false });
+            expect(res1).to.be('&lt;html&gt;');
+
+            var res2 = render('{{ foo | escape }}', {foo: {toString: function() { return '<html>'; }}}, { autoescape: false });
+            expect(res2).to.be('&lt;html&gt;');
+
+            var res3 = render('{{ foo | escape }}', { foo: null }, { autoescape: false });
+            expect(res3).to.be('');
+
+            finish(done);
+        });
+
+        it('should not escape safe strings with autoescape on', function(done) {
+            var res1 = render('{{ "<html>" | safe | escape }}', {}, { autoescape: true });
+            expect(res1).to.be('<html>');
+
+            var res2 = render('{% set val = "<html>" | safe | e %}{{ val }}', {}, { autoescape: true });
+            expect(res2).to.be('<html>');
+            finish(done);
+        });
+
+        it('should keep strings escaped after they have been escaped', function(done) {
+            var res = render('{% set val = "<html>" | e | safe %}{{ val }}', {}, { autoescape: false });
             expect(res).to.be('&lt;html&gt;');
             finish(done);
         });
@@ -227,9 +286,31 @@
             equal('{{ [1,2,3] | length }}', '3');
             equal('{{ blah|length }}', '0');
             equal('{{ str | length }}', {str:r.markSafe('blah')}, '4');
+            equal('{{ str | length }}', {str:'blah'}, '4');
+            equal('{{ str | length }}', {str:new String('blah')}, '4'); //jshint ignore:line
             equal('{{ undefined | length }}', '0');
             equal('{{ null | length }}', '0');
             equal('{{ nothing | length }}', '0');
+            equal('{{ obj | length }}', {obj: {}}, '0');
+            equal('{{ obj | length }}', {obj: {key: 'value'}}, '1');
+            equal('{{ obj | length }}', {obj: {key: 'value', length: 5}}, '2');
+            equal('{{ obj.length }}', {obj: {key: 'value', length: 5}}, '5');
+            equal('{{ arr | length }}', {arr: [0, 1]}, '2');
+            equal('{{ arr | length }}', {arr: [0, , 2]}, '3'); // jshint ignore:line
+            equal('{{ arr | length }}', {arr: new Array(0, 1)}, '2');
+            var arr = new Array(0, 1);
+            arr.key = 'value';
+            equal('{{ arr | length }}', {arr: arr}, '2');
+            if(typeof Map === 'function') {
+                var map = new Map([['key1', 'value1'], ['key2', 'value2']]);
+                map.set('key3', 'value3');
+                equal('{{ map | length }}', {map: map}, '3');
+            }
+            if(typeof Set === 'function') {
+                var set = new Set(['value1']);
+                set.add('value2');
+                equal('{{ set | length }}', {set: set}, '2');
+            }
             finish(done);
         });
 
@@ -249,6 +330,17 @@
             equal('{{ null | lower }}', '');
             equal('{{ undefined | lower }}', '');
             equal('{{ nothing | lower }}', '');
+            finish(done);
+        });
+
+        it('nl2br', function(done) {
+            equal('{{ null | nl2br }}', '');
+            equal('{{ undefined | nl2br }}', '');
+            equal('{{ nothing | nl2br }}', '');
+            equal('{{ str | nl2br }}', {str: r.markSafe('foo\r\nbar')}, 'foo<br />\nbar');
+            equal('{{ str | nl2br }}', {str: r.markSafe('foo\nbar')}, 'foo<br />\nbar');
+            equal('{{ str | nl2br }}', {str: r.markSafe('foo\n\nbar')}, 'foo<br />\n<br />\nbar');
+            equal('{{ "foo\nbar" | nl2br }}', 'foo&lt;br /&gt;\nbar');
             finish(done);
         });
 
@@ -360,6 +452,26 @@
             finish(done);
         });
 
+        it('sum', function(done) {
+            equal('{{ items | sum }}',
+                  { items: [1, 2, 3] },
+                  '6');
+
+            equal('{{ items | sum("value") }}',
+                  { items: [{ value: 1 },
+                            { value: 2 },
+                            { value: 3 }] },
+                  '6');
+
+            equal('{{ items | sum("value", 10) }}',
+                  { items: [{ value: 1 },
+                            { value: 2 },
+                            { value: 3 }] },
+                  '16');
+
+            finish(done);
+        });
+
         it('sort', function(done) {
             equal('{% for i in [3,5,2,1,4,6] | sort %}{{ i }}{% endfor %}',
                   '123456');
@@ -391,6 +503,26 @@
         it('string', function(done) {
             equal('{% for i in 1234 | string | list %}{{ i }},{% endfor %}',
                   '1,2,3,4,');
+            finish(done);
+        });
+
+        it('striptags', function(done) {
+            equal('{{ html | striptags }}', {html: '<foo>bar'}, 'bar');
+            equal('{{ html | striptags }}',
+                  {
+                      html: '  <p>an  \n <a href="#">example</a> link</p>\n<p>to a webpage</p> ' +
+                            '<!-- <p>and some comments</p> -->'
+                  },
+                  'an example link to a webpage');
+            equal('{{ undefined | striptags }}', '');
+            equal('{{ null | striptags }}', '');
+            equal('{{ nothing | striptags }}', '');
+            equal('{{ html | striptags(true) }}',
+                  {
+                      html: '<div>\n  row1\nrow2  \n  <strong>row3</strong>\n</div>\n\n' +
+                            ' HEADER \n\n<ul>\n  <li>option  1</li>\n<li>option  2</li>\n</ul>'
+                  },
+                  'row1\nrow2\nrow3\n\nHEADER\n\noption 1\noption 2');
             finish(done);
         });
 
@@ -454,6 +586,15 @@
             finish(done);
         });
 
+        it('urlencode - object without prototype', function(done) {
+          var obj = Object.create(null);
+          obj['1'] = 2;
+          obj['&1'] = '&2';
+          
+          equal('{{ obj | urlencode | safe }}', { obj: obj}, '1=2&%261=%262');
+          finish(done);
+        });
+
         it('urlize', function(done) {
             // from jinja test suite:
             // https://github.com/mitsuhiko/jinja2/blob/8db47916de0e888dd8664b2511e220ab5ecf5c15/jinja2/testsuite/filters.py#L236-L239
@@ -511,7 +652,7 @@
             equal('{{ "http://jinja.pocoo.org/docs/templates/)" | urlize | safe }}',
                 '<a href="http://jinja.pocoo.org/docs/templates/">http://jinja.pocoo.org/docs/templates/</a>');
             equal('{{ "http://jinja.pocoo.org/docs/templates/\n" | urlize | safe }}',
-                '<a href="http://jinja.pocoo.org/docs/templates/">http://jinja.pocoo.org/docs/templates/</a>');
+                '<a href="http://jinja.pocoo.org/docs/templates/">http://jinja.pocoo.org/docs/templates/</a>\n');
             equal('{{ "http://jinja.pocoo.org/docs/templates/&gt;" | urlize | safe }}',
                 '<a href="http://jinja.pocoo.org/docs/templates/">http://jinja.pocoo.org/docs/templates/</a>');
 
@@ -529,6 +670,10 @@
 
             //markup in the text
             equal('{{ "<b>what up</b>" | urlize | safe }}', '<b>what up</b>');
+
+            //breaklines and tabs in the text
+            equal('{{ "what\nup" | urlize | safe }}', 'what\nup');
+            equal('{{ "what\tup" | urlize | safe }}', 'what\tup');
 
             finish(done);
         });
